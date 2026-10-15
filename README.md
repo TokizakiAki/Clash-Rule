@@ -15,13 +15,13 @@ https://raw.githubusercontent.com/kanwox/Clash-Rule/main/Clash_rule.js
 **🔀 分流**
 - 广告拦截：DNS 层直接返回解析失败（零流量），规则层 REJECT 兜底
 - 12 个应用独立分流：AI / Apple / GitHub / Google / Microsoft / Spotify / Telegram / TikTok / TV（Netflix·Disney+·HBO·Prime Video·Apple TV+）/ Twitch / X / YouTube
-- 私有网络直连 → 国内域名/IP 直连 → 其余走主代理
-- 自动过滤节点名中的"剩余流量/到期时间/客服/群"等提示性伪节点，不占用测速组
+- 私有网络与系统对时（NTP）直连 → 应用分流 → 国内域名/IP 直连 → 其余走主代理
+- 自动过滤节点名中的"剩余流量/到期时间/客服/群"等提示性伪节点，不占用可选组与测速组
 
 **🎯 策略组**
 - 主代理 / 静态 / 隐藏直连，结构极简
 - 23 个地区动态识别：同地区 ≥2 个节点才自动建组，测速组全部隐藏、不占面板
-- 订阅使用代理集合时自动切换为全量地区组，不会误判
+- 应用策略组既可跟随主代理、直连或指定地区组，也可直接固定单个节点
 
 **🌐 DNS**
 - fake-ip 模式，国内外分流解析
@@ -34,14 +34,14 @@ https://raw.githubusercontent.com/kanwox/Clash-Rule/main/Clash_rule.js
 **⚡ 性能与稳定**
 - 规则集全量 mrs 二进制格式 + 本地缓存：加载快、内存占用低
 - 规则集每周自动更新
-- HTTP / TLS / QUIC 全协议嗅探，纯 IP 流量也能还原域名参与分流；小米云服务、Apple、OpenAI 等敏感服务跳过嗅探
-- TCP 保活参数调优，兼顾移动端电量与连接稳定
+- HTTP / TLS / QUIC 全协议嗅探，纯 IP 流量也能还原域名参与分流；米家云服务、Apple、OpenAI 等敏感服务跳过嗅探
+- 开启统一延迟与 TCP 并发，关闭进程匹配开销，调优 TCP 保活参数兼顾移动端电量与连接稳定
 - 节点全部被过滤时输出警告日志，避免静默断网
 
 **🔧 节点增强（全自动，无需手动配置）**
 - vless / vmess / trojan 自动补全 uTLS chrome 指纹
 - 统一双栈并发连接（IPv4/IPv6 并发择优）
-- 机场订阅节点经 override 同步生效以上全部增强
+- 节点名称按数字自然排序（如 2 排在 10 前），告别字典序错乱
 - 与策略组 / 地区组 / 内建 outbound 重名的节点自动改名、订阅内重名节点自动去重，避免内核启动报错
 
 ## 📦 使用
@@ -51,7 +51,7 @@ https://raw.githubusercontent.com/kanwox/Clash-Rule/main/Clash_rule.js
 | 内核要求 | 较新版本 mihomo（建议 1.18 及以上） |
 | 适用客户端 | Clash Verge Rev / Mihomo Party / ClashMi / FlClash / Bettbox 等支持 JS 覆写的客户端 |
 | 安装方式 | 在客户端「覆写」处通过上方链接或复制粘贴导入本脚本 |
-| 注意事项 | 首次启动需联网下载规则集，请在日志中确认全部下载成功 |
+| 注意事项 | 仅支持节点平铺的订阅（不支持 `proxy-providers` 代理集合）；首次启动需联网下载规则集，请在日志中确认全部下载成功 |
 
 ---
 > 绝大多数情况下无需手动配置，导入即用；不可迁移的字段静默丢弃、以脚本默认配置为准，异常时以日志警告，不会生成语义错误或残缺的配置。
