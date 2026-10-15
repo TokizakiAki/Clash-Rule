@@ -228,7 +228,6 @@ function main(params) {
         }
     ];
 
-    // App 组名单与图标（OWN_GROUPS 派生与组生成共用）
     const apps = [
         { name: "AI", icon: "openai.png" },
         { name: "Apple", icon: "apple.png" },
@@ -247,7 +246,6 @@ function main(params) {
         { name: "YouTube", icon: "youtube.png" }
     ];
 
-    // 脚本固定生成的组名（App 名由 apps 派生）
     const OWN_GROUPS = [
         "主代理",
         "静态",
@@ -331,42 +329,41 @@ function main(params) {
     const toJsRegex = goStyleRegex =>
         new RegExp(goStyleRegex.replace(/^\(\?i\)/, ""), "i");
 
-    // direct / reject 类型不进任何可选组，与下方组的 exclude-type 保持一致
     const allProxies = params.proxies.filter(
         proxy => proxy.type !== "direct" && proxy.type !== "reject"
     );
     const excludeRe = toJsRegex(excludeFilter);
 
-    const matchedRegions = regions.filter(region => {
-        const regex = toJsRegex(region.regex);
-        let count = 0;
+    const usableProxies = allProxies.filter(
+        proxy => !excludeRe.test(proxy.name)
+    );
+    const usableNames = usableProxies.map(proxy => proxy.name);
 
-        for (const proxy of allProxies) {
-            if (
-                regex.test(proxy.name) &&
-                !excludeRe.test(proxy.name)
-            ) {
-                count++;
-                if (count >= REGION_MIN_NODES) return true;
-            }
+    const regionNodeNames = new Map();
+    const activeRegions = regions.filter(region => {
+        const regex = toJsRegex(region.regex);
+        const matched = usableProxies
+            .filter(proxy => regex.test(proxy.name))
+            .map(proxy => proxy.name);
+
+        if (matched.length >= REGION_MIN_NODES) {
+            regionNodeNames.set(region.name, matched);
+            return true;
         }
 
         return false;
     });
 
-    const activeRegions = matchedRegions;
     const hasActiveRegions = activeRegions.length > 0;
 
-    // ── 订阅 DNS 悬空引用清洗 ──
-    // 订阅 DNS 里指向已重建规则集/策略组的 "rule-set:" 键、"#组名" 后缀原样并入会硬报错；
-    // geosite:/geoip: 引用会触发内核额外下载 geo 文件，均须清洗。脚本自身引用在下方独立写入，不受影响
+    // ── 订阅 DNS 清洗 ──
+    // 清洗指向已重建规则集/策略组的引用及 geosite/geoip，避免内核报错或额外下载 geo 文件
 
     // 取自实际会建组的 activeRegions，避免引用到节点不足未建组的地区（内核找不到目标组）
     const REGION_NAMES = new Set(
         activeRegions.map(region => region.name)
     );
 
-    // 本地节点名并入合法引用集："#节点名" 指定解析节点是内核支持的写法，不识别会被误剥
     const PROXY_NAMES = new Set(
         allProxies.map(proxy => proxy && proxy.name).filter(Boolean)
     );
@@ -403,25 +400,46 @@ function main(params) {
             .filter(Boolean);
     };
 
-    // 内核解析 # 后片段（config.parseNameServer）：按 "&" 分段，含 "=" 的是参数（h3=/ecs= 等），
-    // 不含的是目标名，被误当网卡名会运行期静默失败；故只校验裸段、参数段原样保留
-    const stripDanglingRef = entry => {
-        const s = String(entry);
+    // 特殊内建 DNS 协议不走代理路由，无需补 #RULES
+    const isSpecialDnsScheme = s =>
+        /^(system|rcode|dhcp):\/\//i.test(s) ||
+        s.toLowerCase() === "system";
+
+    // # 后按 "&" 分段：含 "=" 的是参数（h3=/ecs= 等）原样保留，裸段是目标名，需校验；
+    // 目标全部失效，或原订阅 respect-rules 且条目无目标时，补 #RULES 交给路由，避免裸 URL 直连（污染/泄漏）
+    const stripDanglingRef = (entry, respectRules = false) => {
+        const s = String(entry).trim();
         const hash = s.indexOf("#");
 
-        if (hash === -1) return s;
+        if (hash === -1) {
+            return respectRules && !isSpecialDnsScheme(s)
+                ? s + "#RULES"
+                : s;
+        }
 
-        const parts = s
+        const base = s.slice(0, hash);
+        const rawParts = s
             .slice(hash + 1)
             .split("&")
             .map(part => part.trim())
-            .filter(Boolean)
-            .filter(part => part.includes("=") || refValid(part));
+            .filter(Boolean);
 
-        if (parts.length > 0) return s.slice(0, hash) + "#" + parts.join("&");
+        const paramParts = rawParts.filter(part => part.includes("="));
+        const targetParts = rawParts.filter(part => !part.includes("="));
+        const validTargets = targetParts.filter(refValid);
 
-        // 无有效引用时补 #RULES 交给路由决定，避免剥成裸 URL 直连（DNS 直连会同时招致污染与泄漏）
-        return s.slice(0, hash) + "#RULES";
+        const needRulesFallback =
+            (targetParts.length > 0 && validTargets.length === 0) ||
+            (targetParts.length === 0 &&
+                respectRules &&
+                !isSpecialDnsScheme(base));
+
+        const finalTargets = needRulesFallback ? ["RULES"] : validTargets;
+        const finalParts = [...finalTargets, ...paramParts];
+
+        return finalParts.length > 0
+            ? base + "#" + finalParts.join("&")
+            : base;
     };
 
     // 节点解析 DNS 不得经代理/策略组出站，否则形成"需要节点才能解析节点"的循环
@@ -453,17 +471,23 @@ function main(params) {
     };
 
     // ── 读取订阅 DNS ──
-    // 无"拒绝生成"分支：不可迁移字段一律静默丢弃、以脚本配置为准，永远输出完整配置；
-    // 仅读取被异常打断时放弃订阅 DNS 整段（按无 DNS 处理，见下方 catch）
+    // 不可迁移字段静默丢弃、以脚本配置为准；读取异常则整段放弃订阅 DNS（见下方 catch）
     const deriveSubDNS = rawDNS => {
         const subDNS = isPlainObject(rawDNS) ? rawDNS : {};
+        const subRespectRules = subDNS["respect-rules"] === true;
+        const hasFallbackComplexity =
+            subDNS.fallback !== undefined ||
+            subDNS["fallback-filter"] !== undefined;
+
+        const cleanWithRules = item =>
+            stripDanglingRef(item, subRespectRules);
 
         const subPSN = stringList(
             subDNS["proxy-server-nameserver"]
-        ).map(stripDanglingRef);
+        ).map(stripProxyRefs);
 
         const subNS = stringList(subDNS.nameserver).map(
-            stripDanglingRef
+            cleanWithRules
         );
 
         const subPolicy = Object.assign(
@@ -499,15 +523,13 @@ function main(params) {
             }
 
             subPolicy[key] = stringList(subPolicy[key]).map(
-                stripDanglingRef
+                cleanWithRules
             );
         }
 
         // ── 清洗 proxy-server-nameserver-policy ──
-        // 键：geosite:/geoip: 丢弃；rule-set: 仅当该名字在订阅原始 rule-providers 中有定义时保留，
-        // 并把该 provider 带入最终配置，查不到定义的视为悬空丢弃。
-        // 值：用 stripDanglingRef 清洗。通吃键不删（区别于普通 nameserver-policy）：此字段只作用于节点域名，
-        // 脚本不在此注入自身条目，通吃键不会覆盖任何脚本配置
+        // 键：geosite:/geoip: 丢弃；rule-set: 仅在订阅原始 rule-providers 有定义时保留并搬运，否则丢弃
+        // 值：stripProxyRefs 清洗；通吃键不删（只作用于节点域名，不会覆盖脚本配置）
         const rawPSNPolicy = asPlainObject(
             subDNS["proxy-server-nameserver-policy"]
         );
@@ -537,7 +559,7 @@ function main(params) {
                     subPSNPolicy[
                         "rule-set:" + validNames.join(",")
                     ] = stringList(rawPSNPolicy[key]).map(
-                        stripDanglingRef
+                        stripProxyRefs
                     );
                 }
 
@@ -545,7 +567,7 @@ function main(params) {
             }
 
             subPSNPolicy[key] = stringList(rawPSNPolicy[key]).map(
-                stripDanglingRef
+                stripProxyRefs
             );
         }
 
@@ -554,31 +576,24 @@ function main(params) {
 
         if (subPSN.length > 0) {
             // 机场显式设置节点 DNS 时独占使用，不混入公共 DNS
-            proxyServerNameserver = [
-                ...new Set(subPSN.map(stripProxyRefs))
-            ];
-            proxyServerNameserverPolicy =
-                stripProxyRefsPolicy(subPSNPolicy);
+            proxyServerNameserver = [...new Set(subPSN)];
+            proxyServerNameserverPolicy = subPSNPolicy;
         } else {
             // 节点 policy 视为未设置：收集的旧 rule-set 依赖一并放弃，否则并入的 provider 无人引用、凭空下载
             for (const key of Object.keys(carriedRuleProviders)) {
                 delete carriedRuleProviders[key];
             }
 
-            // 未显式设置节点 DNS 时，以普通域名解析策略为迁移来源，避免新补公共 DNS 屏蔽机场专用解析
-            const hasFallbackComplexity =
-                subDNS.fallback !== undefined ||
-                subDNS["fallback-filter"] !== undefined;
-
+            // 未显式设置节点 DNS 时，以普通解析策略为迁移来源
             if (hasFallbackComplexity) {
-                // fallback 属"路由选出 DNS 出口"的复杂行为，无法在单一列表等价表达；忽略，节点解析直接用国内 DoH（不怕污染）
+                // fallback 无法在单一列表等价表达，忽略；节点解析直接用国内 DoH
                 proxyServerNameserver = [...CN_DNS_DOH];
                 proxyServerNameserverPolicy = undefined;
             } else if (
                 subNS.length > 0 ||
                 Object.keys(subPolicy).length > 0
             ) {
-                // 按原优先关系迁入节点解析（policy 优先于 nameserver 不变）
+                // 按原优先关系迁入（policy 优先于 nameserver）
                 proxyServerNameserver =
                     subNS.length > 0
                         ? [...new Set(subNS.map(stripProxyRefs))]
@@ -589,7 +604,7 @@ function main(params) {
                         ? stripProxyRefsPolicy(subPolicy)
                         : undefined;
             } else {
-                // 无任何可继承解析信息，用默认公共 DNS
+                // 无可继承信息，用默认公共 DNS
                 proxyServerNameserver = [...CN_DNS_DOH];
                 proxyServerNameserverPolicy = undefined;
             }
@@ -600,6 +615,7 @@ function main(params) {
             subNS,
             subPolicy,
             subFilter,
+            hasFallbackComplexity,
             carriedRuleProviders,
             proxyServerNameserver,
             proxyServerNameserverPolicy
@@ -637,6 +653,7 @@ function main(params) {
         subNS,
         subPolicy,
         subFilter,
+        hasFallbackComplexity,
         carriedRuleProviders,
         proxyServerNameserver,
         proxyServerNameserverPolicy
@@ -662,9 +679,7 @@ function main(params) {
             ? { "fake-ip-range6": "fdfe:dcba:9876::/64" }
             : {}),
         "cache-algorithm": "arc",
-        // 显式声明，不依赖内核默认值
         "fake-ip-filter-mode": "blacklist",
-        // 保留订阅自带的 hosts 能力
         "use-hosts":
             typeof subDNS["use-hosts"] === "boolean"
                 ? subDNS["use-hosts"]
@@ -714,15 +729,15 @@ function main(params) {
                       proxyServerNameserverPolicy
               }
             : {}),
-        // 订阅指定了 DNS 就独占使用；否则用海外 DoH 兜底。#RULES：按路由规则出站（未匹配项经 MATCH 落主代理），与组名解耦
-        nameserver: subNS.length > 0
-            ? [...new Set(subNS)]
-            : [
-                  "https://1.1.1.1/dns-query#RULES",
-                  "https://8.8.8.8/dns-query#RULES"
-              ],
-        // DIRECT 命中且未被 nameserver-policy 覆盖的域名（未收录 cn-domain 的冷门国内站点）用国内 DNS，避免退回主代理查海外。
-        // 用纯 IP：该字段用 DoH 在部分环境会反复回退 default-nameserver 重复解析、拖高延迟
+        // 订阅无 fallback 且有 nameserver 时独占使用；带 fallback 或未指定则用海外 DoH 兜底。#RULES：按路由规则出站，与组名解耦
+        nameserver:
+            !hasFallbackComplexity && subNS.length > 0
+                ? [...new Set(subNS)]
+                : [
+                      "https://1.1.1.1/dns-query#RULES",
+                      "https://8.8.8.8/dns-query#RULES"
+                  ],
+        // DIRECT 命中且未被 policy 覆盖的冷门国内域名用国内明文 DNS；DoH 在部分环境会反复回退 default-nameserver，拖高延迟
         "direct-nameserver": [...CN_DNS_PLAIN],
         // true：DIRECT 命中域名先走 nameserver-policy，未被覆盖才落到 direct-nameserver
         "direct-nameserver-follow-policy": true,
@@ -812,10 +827,8 @@ function main(params) {
 
     const renamedRS = {};
 
-    // 并入确认必要的旧 rule-set 依赖；与自建规则集同名时订阅份改名 sub-<原名>（仍冲突加序号），
-    // 并同步改写 policy 键——两处必须一致，否则 policy 指向不存在的规则集
-    // type: file 的 provider 指向订阅方机器上不存在的本地文件，搬运过去内核启动即报错；
-    // 这类连同其在 policy 中的 rule-set 引用一并丢弃
+    // 并入必要的旧 rule-set 依赖；与自建同名时改名 sub-<原名>（冲突加序号），并同步改写 policy 键
+    // type: file 指向订阅方本地文件，搬运会令内核启动报错，连同 policy 中的引用一并丢弃
     const droppedCarriedRS = new Set();
 
     Object.keys(carriedRuleProviders).forEach(name => {
@@ -843,20 +856,22 @@ function main(params) {
             renamedRS[name] = finalName;
         }
 
-        // 搬运的 provider 沿用订阅里的 path，可能与自建 provider 指向同一缓存文件，
-        // 按各自 interval 更新时互相覆写；basename 换成 sub-<finalName>，保留原扩展名（format 未必是 mrs）
+        // path 可能与自建 provider 缓存文件冲突；basename 换成 sub-<原名>，保留原扩展名
         const finalProvider = Object.assign({}, provider);
 
         if (
             typeof finalProvider.path === "string" &&
             finalProvider.path.length > 0
         ) {
-            const segs = finalProvider.path.split("/");
+            const segs = finalProvider.path.split(/[\\/]/);
             const base = segs[segs.length - 1];
             const dot = base.lastIndexOf(".");
             const ext = dot > 0 ? base.slice(dot) : "";
+            const filePrefix = finalName.startsWith("sub-")
+                ? finalName
+                : "sub-" + finalName;
 
-            segs[segs.length - 1] = "sub-" + finalName + ext;
+            segs[segs.length - 1] = filePrefix + ext;
             finalProvider.path = segs.join("/");
         }
 
@@ -872,7 +887,6 @@ function main(params) {
             params.dns["proxy-server-nameserver-policy"];
         const newPolicy = {};
 
-        // 只改写 rule-set: 开头的键，其余键原样保留
         Object.keys(oldPolicy).forEach(key => {
             const names = ruleSetNames(key);
 
@@ -929,29 +943,6 @@ function main(params) {
 
     const groups = [];
 
-    // include-all 成员会被内核按名称强制重排，显式 proxies 列表则保留顺序，故各组显式列出成员
-    const usableNames = allProxies
-        .filter(proxy => !excludeRe.test(proxy.name))
-        .map(proxy => proxy.name);
-
-    const regionNodeNames = new Map(
-        activeRegions.map(region => {
-            const regex = toJsRegex(region.regex);
-
-            return [
-                region.name,
-                allProxies
-                    .filter(
-                        proxy =>
-                            regex.test(proxy.name) &&
-                            !excludeRe.test(proxy.name)
-                    )
-                    .map(proxy => proxy.name)
-            ];
-        })
-    );
-
-    // 主代理：唯一顶层入口
     groups.push({
         name: "主代理",
         type: "select",
@@ -1003,7 +994,6 @@ function main(params) {
         });
     });
 
-    // 地区测速组（全隐藏）
     activeRegions.forEach(region => {
         groups.push({
             name: region.name,
@@ -1033,12 +1023,8 @@ function main(params) {
 
     params["proxy-groups"] = groups;
 
-    // 规则自上而下先命中先决定，顺序即优先级，四层：
-    //   1. 私网 / 广告（避免内网域名被后面的规则带去代理）
-    //   2. 传输层兜底（NTP、可选 QUIC 阻断；必须排在应用分流前，否则 UDP/443 被应用规则抢先）
-    //   3. 应用分流
-    //   4. 国内直连 → MATCH 兜底
-    // cn-domain 排在 Google / Apple / Microsoft 之后：让应用分流先吃掉，避免其国内 CDN 域名被直连截胡
+    // 规则先命中先决定，顺序：私网/广告 → 传输层兜底（NTP、QUIC，须先于应用分流）→ 应用分流 → 国内直连 → MATCH
+    // cn-domain 排在 Google / Apple / Microsoft 之后，避免其国内 CDN 域名被直连截胡
     params.rules = [
         "RULE-SET,private-domain,DIRECT",
         "RULE-SET,private-ip,DIRECT,no-resolve",
