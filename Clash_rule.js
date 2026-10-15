@@ -3,7 +3,7 @@
 
 // ── 可调参数（集中维护） ──
 const DEFAULT_IP_VERSION = "dual"; // 双栈偏好：dual(并发择优) / ipv6-prefer / ipv4-prefer
-const REGION_MIN_NODES = 2;        // 达到该值才建组；provider 订阅时节点不可见，不参与判断
+const REGION_MIN_NODES = 2;        // 达到该值才建组
 const RS_INTERVAL = 604800;        // 规则集更新周期：一周
 const CN_DNS_DOH = [
     "https://223.5.5.5/dns-query",
@@ -38,15 +38,20 @@ function main(params) {
             proxy.name !== ""
     );
 
+    // provider 订阅的节点运行时才出现，脚本无法枚举成员，组内顺序会被内核按名称重排；
+    // 不支持该形态，直接拒绝生成
+    if (Object.keys(params["proxy-providers"] || {}).length > 0) {
+        throw new Error(
+            "[Clash_rule.js] 检测到 proxy-providers 订阅，本脚本仅支持节点平铺的订阅形式，已拒绝生成配置。"
+        );
+    }
+
     // 记住面板手动选择与 fake-ip 缓存；订阅已设置的项以订阅为准
     params.profile = Object.assign(
         { "store-selected": true, "store-fake-ip": true },
         isPlainObject(params.profile) ? params.profile : {}
     );
 
-    // 订阅自身是否使用代理集合（决定地区组是全量还是按节点数筛选）
-    const subHasProviders =
-        Object.keys(params["proxy-providers"] || {}).length > 0;
     // 订阅原始 rule-providers 快照：判断 rule-set: 依赖是否确有定义，须在下方覆写前读取
     const subRuleProviders = Object.assign(
         {},
@@ -298,6 +303,30 @@ function main(params) {
         usedProxyNames.add(name);
     });
 
+    // 自然排序：名字中的连续数字段按数值比较，保证多位数序号排在个位数之后。
+    // 排序结果经下方各组的显式 proxies 列表带入最终配置
+    const naturalCompare = (a, b) => {
+        const chunkRe = /(\d+)|(\D+)/g;
+        const chunk = s => {
+            const parts = [];
+            let m;
+            while ((m = chunkRe.exec(s)) !== null) {
+                parts.push(m[1] !== undefined ? Number(m[1]) : m[2]);
+            }
+            return parts;
+        };
+        const pa = chunk(a), pb = chunk(b);
+        for (let i = 0; i < Math.min(pa.length, pb.length); i++) {
+            const x = pa[i], y = pb[i];
+            if (x === y) continue;
+            if (typeof x === "number" && typeof y === "number") return x - y;
+            return String(x) < String(y) ? -1 : 1;
+        }
+        return pa.length - pb.length;
+    };
+
+    params.proxies.sort((a, b) => naturalCompare(a.name, b.name));
+
     // 内核用 Go 正则，JS 侧不支持 (?i) 前缀
     const toJsRegex = goStyleRegex =>
         new RegExp(goStyleRegex.replace(/^\(\?i\)/, ""), "i");
@@ -325,8 +354,7 @@ function main(params) {
         return false;
     });
 
-    // provider 订阅时脚本期看不到节点，维持全量地区组
-    const activeRegions = subHasProviders ? regions : matchedRegions;
+    const activeRegions = matchedRegions;
     const hasActiveRegions = activeRegions.length > 0;
 
     // ── 订阅 DNS 悬空引用清洗 ──
@@ -338,7 +366,7 @@ function main(params) {
         activeRegions.map(region => region.name)
     );
 
-    // 本地节点名并入合法引用集："#节点名" 指定解析节点是内核支持的写法，不识别会被误剥；provider 订阅下该集合为空
+    // 本地节点名并入合法引用集："#节点名" 指定解析节点是内核支持的写法，不识别会被误剥
     const PROXY_NAMES = new Set(
         allProxies.map(proxy => proxy && proxy.name).filter(Boolean)
     );
@@ -899,95 +927,29 @@ function main(params) {
         }
     });
 
-    // 上方 JS 逻辑的 provider 版本（节点运行时才出现，只能用 override 表达式），两侧判定条件必须等价
-    // 用 .["client-fingerprint"] 而非 .client-fingerprint：避免 yq/jq 把连字符 '-' 误解析为减法
-    const FP_EXPR =
-        '(select(.type == "trojan" or ((.type == "vless" or .type == "vmess") and (.tls == true or has("reality-opts")))) | select(has("client-fingerprint") | not) | .["client-fingerprint"]) = "chrome"';
-
-    // 规范化为表达式数组；类型非法返回 null，调用方原样保留该 provider、不做注入
-    const normalizeOverrideExpr = raw => {
-        if (raw === undefined || raw === null) return [];
-
-        if (typeof raw === "string") {
-            return raw.length > 0 ? [raw] : [];
-        }
-
-        if (Array.isArray(raw)) {
-            if (raw.some(item => typeof item !== "string")) {
-                return null;
-            }
-
-            return raw.filter(item => item.length > 0);
-        }
-
-        return null;
-    };
-
-    Object.entries(params["proxy-providers"] || {}).forEach(
-        ([name, provider]) => {
-            if (!provider || typeof provider !== "object") {
-                return;
-            }
-
-            // 组的 url 健康检查只测 proxies 字段成员，provider 节点须靠 provider 自身的 health-check 产出延迟数据，
-            // 否则地区 url-test 组拿不到延迟、永远选中第一个节点。enable 强制开启，其余项以订阅为准
-            const subHealthCheck = isPlainObject(
-                provider["health-check"]
-            )
-                ? provider["health-check"]
-                : {};
-
-            provider["health-check"] = Object.assign(
-                {
-                    enable: true,
-                    url: TEST_URL_PROXY,
-                    interval: 300,
-                    timeout: 5000,
-                    "expected-status": 204,
-                    lazy: true
-                },
-                subHealthCheck,
-                { enable: true }
-            );
-
-            const override = provider.override;
-
-            if (
-                override !== undefined &&
-                override !== null &&
-                (typeof override !== "object" ||
-                    Array.isArray(override))
-            ) {
-                return;
-            }
-
-            const existingExpr = normalizeOverrideExpr(
-                (override || {})["override-expr"]
-            );
-
-            if (existingExpr === null) return;
-
-            // 保留上游表达式顺序；脚本指纹表达式最多出现一次（订阅每次刷新重跑本段）
-            const finalExpr = existingExpr.includes(FP_EXPR)
-                ? existingExpr
-                : [...existingExpr, FP_EXPR];
-
-            const mergedOverride = Object.assign(
-                {},
-                override || {}
-            );
-
-            if (!("ip-version" in mergedOverride)) {
-                mergedOverride["ip-version"] =
-                    DEFAULT_IP_VERSION;
-            }
-
-            mergedOverride["override-expr"] = finalExpr;
-            provider.override = mergedOverride;
-        }
-    );
-
     const groups = [];
+
+    // include-all 成员会被内核按名称强制重排，显式 proxies 列表则保留顺序，故各组显式列出成员
+    const usableNames = allProxies
+        .filter(proxy => !excludeRe.test(proxy.name))
+        .map(proxy => proxy.name);
+
+    const regionNodeNames = new Map(
+        activeRegions.map(region => {
+            const regex = toJsRegex(region.regex);
+
+            return [
+                region.name,
+                allProxies
+                    .filter(
+                        proxy =>
+                            regex.test(proxy.name) &&
+                            !excludeRe.test(proxy.name)
+                    )
+                    .map(proxy => proxy.name)
+            ];
+        })
+    );
 
     // 主代理：唯一顶层入口
     groups.push({
@@ -1008,9 +970,7 @@ function main(params) {
         name: "静态",
         type: "select",
         icon: "https://cdn.jsdmirror.com/gh/Koolson/Qure@63be653774a6a83cd8e475a7b65f1ed68b9a0093/IconSet/Color/Static.png",
-        "include-all": true,
-        "exclude-type": "direct|reject",
-        "exclude-filter": excludeFilter,
+        proxies: usableNames,
         "empty-fallback": "REJECT"
     });
 
@@ -1029,7 +989,7 @@ function main(params) {
         ...activeRegions.map(region => region.name)
     ];
 
-    // App 策略组：proxies 给切换目标，include-all 再塞入订阅节点本身，两者缺一不可
+    // App 策略组：proxies 前列为切换目标，后列订阅节点本身，两者缺一不可
     apps.forEach(app => {
         const icon = app.icon.startsWith("http")
             ? app.icon
@@ -1039,25 +999,18 @@ function main(params) {
             name: app.name,
             type: "select",
             icon,
-            proxies: appProxiesList,
-            "include-all": true,
-            "exclude-type": "direct|reject",
-            "exclude-filter": excludeFilter
+            proxies: [...appProxiesList, ...usableNames]
         });
     });
 
-    // 地区测速组（全隐藏）：filter 传的是 Go 正则原串，(?i) 合法
+    // 地区测速组（全隐藏）
     activeRegions.forEach(region => {
         groups.push({
             name: region.name,
             type: "url-test",
             hidden: true,
             icon: region.icon,
-            "include-all": true,
-            "exclude-type": "direct|reject",
-            filter: region.regex,
-            "exclude-filter": excludeFilter,
-            // provider 订阅下可能一个节点都匹配不上，用 REJECT 兜底而不是留空组
+            proxies: regionNodeNames.get(region.name),
             "empty-fallback": "REJECT",
             url: TEST_URL_PROXY,
             interval: 300,
@@ -1069,18 +1022,13 @@ function main(params) {
         });
     });
 
-    // 本地订阅下若全部节点被 excludeFilter 过滤，「静态」将解析为空并回落 REJECT（静默断网），
-    // 转换期能确定时留一条日志；provider 订阅节点不可见，此检查覆盖不到，只能看内核日志
-    if (!subHasProviders) {
-        const usableCount = allProxies.filter(
-            proxy => !excludeRe.test(proxy.name)
-        ).length;
+    // 全部节点被 excludeFilter 过滤时「静态」将解析为空并回落 REJECT（静默断网），转换期能确定，留一条日志
+    const usableCount = usableNames.length;
 
-        if (usableCount === 0) {
-            warnLog(
-                "[Clash_rule.js] 订阅节点全部被 excludeFilter 过滤，「静态」组将为空并回落 REJECT，网络将不可用；请检查 excludeFilter 或节点命名。"
-            );
-        }
+    if (usableCount === 0) {
+        warnLog(
+            "[Clash_rule.js] 订阅节点全部被 excludeFilter 过滤，「静态」组将为空并回落 REJECT，网络将不可用；请检查 excludeFilter 或节点命名。"
+        );
     }
 
     params["proxy-groups"] = groups;
