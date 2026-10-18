@@ -229,20 +229,12 @@ function main(params) {
     ];
 
     const apps = [
-        { name: "AI", icon: "openai.png" },
-        { name: "Apple", icon: "apple.png" },
         {
             name: "GitHub",
             icon: "https://cdn.jsdmirror.com/gh/kanwox/Stash-Conf@main/github.png"
         },
         { name: "Google", icon: "google.png" },
-        { name: "Microsoft", icon: "microsoft.png" },
-        { name: "Spotify", icon: "spotify.png" },
         { name: "Telegram", icon: "telegram.png" },
-        { name: "TikTok", icon: "tiktok.png" },
-        { name: "TV", icon: "netflix.png" },
-        { name: "Twitch", icon: "twitch.png" },
-        { name: "X", icon: "x.png" },
         { name: "YouTube", icon: "youtube.png" }
     ];
 
@@ -776,21 +768,10 @@ function main(params) {
         "private-domain": "private",
         "ads-domain": "category-ads-all",
         "youtube-domain": "youtube",
-        "twitch-domain": "twitch",
-        "twitter-domain": "twitter",
-        "tiktok-domain": "tiktok",
         "telegram-domain": "telegram",
         "github-domain": "github",
         "ai-domain": "category-ai-!cn",
-        "netflix-domain": "netflix",
-        "disney-domain": "disney",
-        "primevideo-domain": "primevideo",
-        "appletv-domain": "apple-tvplus",
-        "hbo-domain": "hbo",
-        "spotify-domain": "spotify",
         "google-domain": "google",
-        "apple-domain": "apple",
-        "microsoft-domain": "microsoft",
         "proxy-domain": "geolocation-!cn",
         "cn-domain": "cn"
     };
@@ -1038,24 +1019,13 @@ function main(params) {
             : []),
 
         "RULE-SET,youtube-domain,YouTube",
-        "RULE-SET,twitch-domain,Twitch",
         "RULE-SET,twitter-domain,X",
-        "RULE-SET,tiktok-domain,TikTok",
         "RULE-SET,telegram-domain,Telegram",
         "RULE-SET,telegram-ip,Telegram,no-resolve",
         "RULE-SET,ai-domain,AI",
         "RULE-SET,github-domain,GitHub",
 
-        "RULE-SET,netflix-domain,TV",
-        "RULE-SET,disney-domain,TV",
-        "RULE-SET,primevideo-domain,TV",
-        "RULE-SET,appletv-domain,TV",
-        "RULE-SET,hbo-domain,TV",
-        "RULE-SET,spotify-domain,Spotify",
-
         "RULE-SET,google-domain,Google",
-        "RULE-SET,apple-domain,Apple",
-        "RULE-SET,microsoft-domain,Microsoft",
 
         "RULE-SET,proxy-domain,主代理",
 
