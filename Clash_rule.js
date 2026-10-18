@@ -229,6 +229,7 @@ function main(params) {
     ];
 
     const apps = [
+        { name: "AI", icon: "openai.png" },
         {
             name: "GitHub",
             icon: "https://cdn.jsdmirror.com/gh/kanwox/Stash-Conf@main/github.png"
@@ -1019,7 +1020,6 @@ function main(params) {
             : []),
 
         "RULE-SET,youtube-domain,YouTube",
-        "RULE-SET,twitter-domain,X",
         "RULE-SET,telegram-domain,Telegram",
         "RULE-SET,telegram-ip,Telegram,no-resolve",
         "RULE-SET,ai-domain,AI",
