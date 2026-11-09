@@ -241,6 +241,7 @@ function main(params) {
         { name: "GitHub", icon: "GitHub.png" },
         { name: "Google", icon: "Google_Search.png" },
         { name: "Steam", icon: "Steam.png" },
+        { name: "Bilibili", icon: "bilibili.png" },
         { name: "Telegram", icon: "Telegram_X.png" },
         { name: "X", icon: "X.png" },
         { name: "YouTube", icon: "YouTube.png" }
@@ -788,21 +789,12 @@ function main(params) {
         "ads-domain": "category-ads-all",
         "youtube-domain": "youtube",
         "twitter-domain": "twitter",
-        "tiktok-domain": "tiktok",
+        "bilibili-domain": "bilibili",
         "telegram-domain": "telegram",
         "github-domain": "github",
         "ai-domain": "category-ai-!cn",
-        "netflix-domain": "netflix",
-        "disney-domain": "disney",
-        "primevideo-domain": "primevideo",
-        "appletv-domain": "apple-tvplus",
-        "hbo-domain": "hbo",
-        "spotify-domain": "spotify",
         "steam-domain": "steam",
-        "paypal-domain": "paypal",
         "google-domain": "google",
-        "apple-domain": "apple",
-        "microsoft-domain": "microsoft",
         "proxy-domain": "geolocation-!cn",
         "cn-domain": "cn"
     };
@@ -1062,24 +1054,14 @@ function main(params) {
 
         "RULE-SET,youtube-domain,YouTube",
         "RULE-SET,twitter-domain,X",
-        "RULE-SET,tiktok-domain,TikTok",
         "RULE-SET,telegram-domain,Telegram",
         "RULE-SET,telegram-ip,Telegram,no-resolve",
-        "RULE-SET,spotify-domain,Spotify",
         "RULE-SET,ai-domain,AI",
         "RULE-SET,github-domain,GitHub",
         "RULE-SET,steam-domain,Steam",
-        "RULE-SET,paypal-domain,PayPal",
-
-        "RULE-SET,netflix-domain,TV",
-        "RULE-SET,disney-domain,TV",
-        "RULE-SET,primevideo-domain,TV",
-        "RULE-SET,appletv-domain,TV",
-        "RULE-SET,hbo-domain,TV",
+        "RULE-SET,bilibili-domain,Bilibili",
 
         "RULE-SET,google-domain,Google",
-        "RULE-SET,apple-domain,Apple",
-        "RULE-SET,microsoft-domain,Microsoft",
 
         "RULE-SET,proxy-domain,主代理",
 
